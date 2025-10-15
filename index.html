@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Temperature Monitor Dashboard</title>
+</head>
+
+<style>
+  body {
+  font-family: Arial, sans-serif;
+  background-color: #f6f6f6;
+  margin: 0;
+  padding: 20px;
+}
+
+
+.container {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+
+.left-side,
+.right-side {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+
+.temp-display,
+.chart,
+.logs,
+.chambers {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  position: relative;
+}
+
+
+.temps {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 100px;
+  position: relative;
+}
+
+.temp-section {
+  width: 50%;
+  text-align: center;
+}
+
+.temp-section h3 {
+  margin-bottom: 5px;
+}
+
+.temp-section p {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+
+.divider {
+    position: absolute;
+    left: 50%;
+    top: 0%;
+    height: 140px;
+    width: 2px;
+    background-color: #ccc;
+    transform: translateX(-50%);
+}
+
+
+.status {
+  position: absolute;
+  bottom: 10px;
+  left: 20px;
+  font-size: 20px;
+}
+
+.status span {
+  color: green;
+  font-weight: bold;
+}
+
+.temp-display{
+  height: 175px;
+}
+
+
+.chambers {
+  height: 175px;
+}
+
+.logs {
+  height: 308px;
+}
+
+h3 {
+  margin-bottom: 10px;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  font-size: 20px;
+}
+
+p {
+  margin: 5px 0;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .container {
+    flex-direction: column;
+  }
+}
+
+</style>
+
+<body>
+  <div class="container">
+    <div class="left-side">
+  
+      <div class="temp-display">
+        <div class="temps">
+          <div class="temp-section">
+            <h3>Saline Temp.</h3>
+            <p id="salineTemp">36.0°</p>
+          </div>
+
+     
+          <div class="divider"></div>
+
+          <div class="temp-section">
+            <h3>Patient Temp.</h3>
+            <p id="patientTemp">36.0°</p>
+          </div>
+        </div>
+
+ 
+        <p class="status">Status: <span id="status">Stable</span></p>
+      </div>
+
+    
+      <div class="chart">
+        <canvas id="tempChart"></canvas>
+      </div>
+    </div>
+
+    <div class="right-side">
+     
+      <div class="chambers">
+        <h3>Chamber Status</h3>
+        <ul>
+          <li>C1: 36°</li>
+          <li>C2: 36°</li>
+          <li>C3: 36°</li>
+          <li>C4: — In Use</li>
+        </ul>
+      </div>
+
+  
+      <div class="logs">
+        <h3>Logs</h3>
+        <ul id="logList">
+          <li>[9:55 PM] Patient's temperature read</li>
+          <li>[10:00 PM] Heater ON</li>
+          <li>[10:15 PM] All chamber reached 36°</li>
+          <li>[10:20 PM] Patient’s temp = same temp → stable</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+<script>
+
+const salineTempEl = document.getElementById("salineTemp");
+const patientTempEl = document.getElementById("patientTemp");
+const statusEl = document.getElementById("status");
+const logList = document.getElementById("logList");
+
+
+const ctx = document.getElementById("tempChart").getContext("2d");
+const tempChart = new Chart(ctx, {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: "Saline Temp (°C)",
+        data: [],
+        borderColor: "blue",
+        fill: false,
+      },
+      {
+        label: "Patient Temp (°C)",
+        data: [],
+        borderColor: "red",
+        fill: false,
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    scales: { y: { beginAtZero: true } },
+  },
+});
+
+let port;
+let reader;
+
+async function connectToArduino() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 });
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    reader = decoder.readable.getReader();
+
+    addLog("✅ Connected to Arduino");
+    readData();
+  } catch (error) {
+    addLog("❌ Connection failed: " + error);
+  }
+}
+
+async function readData() {
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (value) {
+      const [saline, patient] = value.trim().split(",");
+      if (saline && patient) {
+        updateDisplay(parseFloat(saline), parseFloat(patient));
+      }
+    }
+  }
+}
+
+function updateDisplay(saline, patient) {
+  salineTempEl.textContent = saline.toFixed(1) + "°";
+  patientTempEl.textContent = patient.toFixed(1) + "°";
+
+
+  if (Math.abs(saline - patient) < 0.5) {
+    statusEl.textContent = "Stable";
+    statusEl.style.color = "green";
+  } else {
+    statusEl.textContent = "Unstable";
+    statusEl.style.color = "red";
+  }
+
+  addLog(Saline: ${saline.toFixed(1)}°, Patient: ${patient.toFixed(1)}°);
+
+
+  const time = new Date().toLocaleTimeString();
+  tempChart.data.labels.push(time);
+  tempChart.data.datasets[0].data.push(saline);
+  tempChart.data.datasets[1].data.push(patient);
+
+  if (tempChart.data.labels.length > 10) {
+    tempChart.data.labels.shift();
+    tempChart.data.datasets[0].data.shift();
+    tempChart.data.datasets[1].data.shift();
+  }
+
+  tempChart.update();
+}
+
+function addLog(text) {
+  const li = document.createElement("li");
+  li.textContent = [${new Date().toLocaleTimeString()}] ${text};
+  logList.prepend(li);
+}
+
+
+const btn = document.createElement("button");
+btn.textContent = "🔌 Connect to Arduino";
+btn.onclick = connectToArduino;
+document.body.prepend(btn);
+
+</script>
+
+</body>
+</html>
