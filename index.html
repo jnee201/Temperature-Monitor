@@ -1,292 +1,525 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <title>Temperature Monitor Dashboard</title>
-</head>
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
+import { Button } from '@/app/components/ui/button';
+import { Switch } from '@/app/components/ui/switch';
+import { Slider } from '@/app/components/ui/slider';
+import { Badge } from '@/app/components/ui/badge';
+import { Separator } from '@/app/components/ui/separator';
+import { ScrollArea } from '@/app/components/ui/scroll-area';
+import { CircularGauge } from '@/app/components/CircularGauge';
+import { TrendArrow } from '@/app/components/TrendArrow';
+import { RiskBar } from '@/app/components/RiskBar';
+import { 
+  Activity, 
+  Download, 
+  AlertTriangle, 
+  Droplets, 
+  Thermometer,
+  Power,
+  Gauge,
+  Clock,
+  Volume2,
+  VolumeX
+} from 'lucide-react';
 
-<style>
-  body {
-  font-family: Arial, sans-serif;
-  background-color: #f6f6f6;
-  margin: 0;
-  padding: 20px;
+interface LogEntry {
+  timestamp: string;
+  message: string;
+  type: 'info' | 'warning' | 'critical';
 }
 
-
-.container {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
+interface SimulationData {
+  patientTemp: number;
+  targetTemp: number;
+  chamberTemp: number;
+  salineFlowRate: number;
+  timeToCritical: number | null;
 }
 
-
-.left-side,
-.right-side {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-
-.temp-display,
-.chart,
-.logs,
-.chambers {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  padding: 20px;
-  position: relative;
-}
-
-
-.temps {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 100px;
-  position: relative;
-}
-
-.temp-section {
-  width: 50%;
-  text-align: center;
-}
-
-.temp-section h3 {
-  margin-bottom: 5px;
-}
-
-.temp-section p {
-  font-size: 24px;
-  font-weight: bold;
-}
-
-
-.divider {
-    position: absolute;
-    left: 50%;
-    top: 0%;
-    height: 140px;
-    width: 2px;
-    background-color: #ccc;
-    transform: translateX(-50%);
-}
-
-
-.status {
-  position: absolute;
-  bottom: 10px;
-  left: 20px;
-  font-size: 20px;
-}
-
-.status span {
-  color: green;
-  font-weight: bold;
-}
-
-.temp-display{
-  height: 175px;
-}
-
-
-.chambers {
-  height: 175px;
-}
-
-.logs {
-  height: 308px;
-}
-
-h3 {
-  margin-bottom: 10px;
-}
-
-ul {
-  list-style: none;
-  padding: 0;
-  font-size: 20px;
-}
-
-p {
-  margin: 5px 0;
-}
-
-/* Responsive */
-@media (max-width: 900px) {
-  .container {
-    flex-direction: column;
-  }
-}
-
-</style>
-
-<body>
-  <div class="container">
-    <div class="left-side">
+export default function App() {
+  const [isArduinoMode, setIsArduinoMode] = useState(false);
+  const [alarmEnabled, setAlarmEnabled] = useState(true);
+  const [manualOverride, setManualOverride] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [data, setData] = useState<SimulationData>({
+    patientTemp: 37.2,
+    targetTemp: 36.5,
+    chamberTemp: 36.0,
+    salineFlowRate: 250,
+    timeToCritical: null
+  });
   
-      <div class="temp-display">
-        <div class="temps">
-          <div class="temp-section">
-            <h3>Saline Temp.</h3>
-            <p id="salineTemp">36.0°</p>
+  const [manualPatientTemp, setManualPatientTemp] = useState(37.2);
+  const [manualTargetTemp, setManualTargetTemp] = useState(36.5);
+  const [trend, setTrend] = useState<'up' | 'down' | 'stable'>('stable');
+  const [trendRate, setTrendRate] = useState(0);
+  
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const isAlarmPlayingRef = useRef(false);
+  const previousDataRef = useRef(data);
+  
+  // Initialize alarm sound
+  useEffect(() => {
+    // Create oscillator-based alarm sound
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    const playAlarm = () => {
+      if (!alarmEnabled || isAlarmPlayingRef.current) return;
+      
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 880; // A5 note
+      oscillator.type = 'sine';
+      
+      gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.1);
+      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.3);
+      
+      isAlarmPlayingRef.current = true;
+      setTimeout(() => {
+        isAlarmPlayingRef.current = false;
+      }, 300);
+    };
+    
+    // Store play function
+    (window as any).playAlarmSound = playAlarm;
+    
+    return () => {
+      audioContext.close();
+    };
+  }, [alarmEnabled]);
+  
+  const addLog = (message: string, type: 'info' | 'warning' | 'critical' = 'info') => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    setLogs(prev => [{
+      timestamp,
+      message,
+      type
+    }, ...prev].slice(0, 100)); // Keep last 100 logs
+  };
+  
+  // Calculate metrics
+  const tempDelta = Math.abs(data.patientTemp - data.targetTemp);
+  const riskLevel = Math.min(100, (tempDelta / 3) * 100);
+  const patientTempPercentage = ((data.patientTemp - 34) / (42 - 34)) * 100;
+  
+  // Determine trend
+  useEffect(() => {
+    const rate = data.patientTemp - previousDataRef.current.patientTemp;
+    setTrendRate(rate);
+    
+    if (Math.abs(rate) < 0.05) {
+      setTrend('stable');
+    } else if (rate > 0) {
+      setTrend('up');
+    } else {
+      setTrend('down');
+    }
+    
+    previousDataRef.current = data;
+  }, [data.patientTemp]);
+  
+  // Calculate time to critical
+  useEffect(() => {
+    if (trend === 'stable' || trendRate === 0) {
+      setData(prev => ({ ...prev, timeToCritical: null }));
+      return;
+    }
+    
+    const criticalTemp = trend === 'up' ? 40 : 34;
+    const tempDiff = Math.abs(criticalTemp - data.patientTemp);
+    const timeMinutes = tempDiff / Math.abs(trendRate) / 60; // Convert to minutes
+    
+    if (timeMinutes > 0 && timeMinutes < 120) {
+      setData(prev => ({ ...prev, timeToCritical: timeMinutes }));
+    } else {
+      setData(prev => ({ ...prev, timeToCritical: null }));
+    }
+  }, [data.patientTemp, trend, trendRate]);
+  
+  // Simulation loop
+  useEffect(() => {
+    if (manualOverride) return;
+    
+    const interval = setInterval(() => {
+      setData(prev => {
+        // Realistic temperature simulation
+        const noise = (Math.random() - 0.5) * 0.1;
+        const drift = Math.sin(Date.now() / 10000) * 0.05; // Slow drift
+        const danger = Math.random() < 0.02 ? (Math.random() - 0.5) * 0.3 : 0; // 2% chance of sudden change
+        
+        let newPatientTemp = prev.patientTemp + noise + drift + danger;
+        
+        // Temperature regulation (chambers trying to regulate)
+        const regulation = (prev.chamberTemp - newPatientTemp) * 0.02;
+        newPatientTemp += regulation;
+        
+        // Bounds
+        newPatientTemp = Math.max(34, Math.min(42, newPatientTemp));
+        
+        // Chamber temperatures adjust toward target
+        const chamberDrift = (prev.targetTemp - prev.chamberTemp) * 0.05 + (Math.random() - 0.5) * 0.05;
+        
+        const newChamberTemp = Math.max(32, Math.min(40, prev.chamberTemp + chamberDrift));
+        
+        // Saline flow varies
+        const flowNoise = (Math.random() - 0.5) * 10;
+        const newFlow = Math.max(100, Math.min(400, prev.salineFlowRate + flowNoise));
+        
+        // Generate logs
+        if (Math.abs(newPatientTemp - prev.patientTemp) > 0.2) {
+          addLog(`Sudden temperature change detected: ${newPatientTemp.toFixed(2)}°C`, 'warning');
+        }
+        
+        if (Math.abs(newPatientTemp - prev.targetTemp) > 2) {
+          addLog(`Patient temperature deviation: Δ${Math.abs(newPatientTemp - prev.targetTemp).toFixed(2)}°C`, 'critical');
+        }
+        
+        if (Math.random() < 0.05) {
+          const messages = [
+            'Saline flow adjusted',
+            'Chamber recalibrating',
+            'Chamber temperature stable',
+            'System diagnostics: OK',
+            'Thermal regulation active'
+          ];
+          addLog(messages[Math.floor(Math.random() * messages.length)], 'info');
+        }
+        
+        return {
+          ...prev,
+          patientTemp: newPatientTemp,
+          chamberTemp: newChamberTemp,
+          salineFlowRate: newFlow
+        };
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [manualOverride]);
+  
+  // Manual override effect
+  useEffect(() => {
+    if (!manualOverride) return;
+    
+    setData(prev => ({
+      ...prev,
+      patientTemp: manualPatientTemp,
+      targetTemp: manualTargetTemp
+    }));
+  }, [manualPatientTemp, manualTargetTemp, manualOverride]);
+  
+  // Alarm trigger
+  useEffect(() => {
+    if (riskLevel > 70 && alarmEnabled && (window as any).playAlarmSound) {
+      (window as any).playAlarmSound();
+    }
+  }, [riskLevel, alarmEnabled]);
+  
+  const exportLogs = () => {
+    const logText = logs.map(log => 
+      `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}`
+    ).join('\n');
+    
+    const blob = new Blob([logText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `temperature-logs-${new Date().toISOString()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    addLog('Logs exported successfully', 'info');
+  };
+  
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+              <Thermometer className="w-8 h-8 text-blue-500" />
+              Thermal Management Simulator
+            </h1>
+            <p className="text-gray-400 mt-1">ICU Temperature Regulation System</p>
           </div>
-
-     
-          <div class="divider"></div>
-
-          <div class="temp-section">
-            <h3>Patient Temp.</h3>
-            <p id="patientTemp">36.0°</p>
+          
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-lg">
+              <Power className={`w-4 h-4 ${isArduinoMode ? 'text-green-500' : 'text-gray-500'}`} />
+              <span className="text-sm text-gray-300">Arduino</span>
+              <Switch 
+                checked={isArduinoMode} 
+                onCheckedChange={setIsArduinoMode}
+              />
+            </div>
+            
+            <div className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-lg">
+              {alarmEnabled ? (
+                <Volume2 className="w-4 h-4 text-blue-500" />
+              ) : (
+                <VolumeX className="w-4 h-4 text-gray-500" />
+              )}
+              <span className="text-sm text-gray-300">Alarm</span>
+              <Switch 
+                checked={alarmEnabled} 
+                onCheckedChange={setAlarmEnabled}
+              />
+            </div>
           </div>
         </div>
-
- 
-        <p class="status">Status: <span id="status">Stable</span></p>
-      </div>
-
-    
-      <div class="chart">
-        <canvas id="tempChart"></canvas>
+        
+        {/* Main Dashboard */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Panel - Gauges */}
+          <Card className="lg:col-span-2 bg-gray-900/50 border-gray-800">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Gauge className="w-5 h-5" />
+                Temperature Monitoring
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-2 gap-8">
+                <CircularGauge
+                  value={data.patientTemp}
+                  min={34}
+                  max={42}
+                  label="Patient Temperature"
+                  unit="°C"
+                  size={200}
+                  warning={60}
+                  critical={75}
+                />
+                <CircularGauge
+                  value={tempDelta}
+                  min={0}
+                  max={5}
+                  label="Temperature Delta (Δ)"
+                  unit="°C"
+                  size={200}
+                  warning={50}
+                  critical={70}
+                />
+              </div>
+              
+              <Separator className="bg-gray-800" />
+              
+              {/* Trend Analysis */}
+              <div className="bg-gray-800/50 p-4 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-300">AI Trend Analysis</span>
+                  <TrendArrow trend={trend} rate={trendRate} />
+                </div>
+                
+                {data.timeToCritical !== null && (
+                  <div className="flex items-center gap-2 text-red-400">
+                    <Clock className="w-4 h-4" />
+                    <span className="text-sm font-medium">
+                      Time to Critical: {data.timeToCritical.toFixed(1)} minutes
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Risk Bars */}
+              <div className="space-y-4">
+                <RiskBar 
+                  value={riskLevel} 
+                  label="Risk Level (ΔT)" 
+                />
+                <RiskBar 
+                  value={patientTempPercentage} 
+                  label="Patient Temperature (Absolute)" 
+                  showPercentage={false}
+                />
+              </div>
+              
+              {/* Status Display */}
+              <div className="bg-gradient-to-r from-gray-800/50 to-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-400">Target Temp:</span>
+                    <span className="ml-2 font-bold text-blue-400">{data.targetTemp.toFixed(1)}°C</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Deviation:</span>
+                    <span className="ml-2 font-bold text-orange-400">±{tempDelta.toFixed(2)}°C</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Chamber A:</span>
+                    <span className="ml-2 font-bold text-green-400">{data.chamberTemp.toFixed(1)}°C</span>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          {/* Right Panel - Controls & Chambers */}
+          <div className="space-y-6">
+            {/* Manual Override */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between text-white">
+                  <span className="flex items-center gap-2">
+                    <Activity className="w-5 h-5" />
+                    Manual Override
+                  </span>
+                  <Switch 
+                    checked={manualOverride} 
+                    onCheckedChange={setManualOverride}
+                  />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm text-gray-300 flex items-center justify-between">
+                    <span>Patient Temp</span>
+                    <span className="font-bold text-blue-400">{manualPatientTemp.toFixed(1)}°C</span>
+                  </label>
+                  <Slider
+                    value={[manualPatientTemp]}
+                    onValueChange={([val]) => setManualPatientTemp(val)}
+                    min={34}
+                    max={42}
+                    step={0.1}
+                    disabled={!manualOverride}
+                    className="cursor-pointer"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-sm text-gray-300 flex items-center justify-between">
+                    <span>Target Temp</span>
+                    <span className="font-bold text-green-400">{manualTargetTemp.toFixed(1)}°C</span>
+                  </label>
+                  <Slider
+                    value={[manualTargetTemp]}
+                    onValueChange={([val]) => setManualTargetTemp(val)}
+                    min={34}
+                    max={40}
+                    step={0.1}
+                    disabled={!manualOverride}
+                    className="cursor-pointer"
+                  />
+                </div>
+                
+                {!manualOverride && (
+                  <p className="text-xs text-gray-500 italic">
+                    Enable override to manually control temperatures
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Chamber Status */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Droplets className="w-5 h-5" />
+                  Saline Chamber
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="bg-gray-800/50 p-3 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">Chamber A</span>
+                    <Badge variant="outline" className="text-green-400 border-green-400">
+                      ACTIVE
+                    </Badge>
+                  </div>
+                  <div className="text-2xl font-bold text-green-400">
+                    {data.chamberTemp.toFixed(1)}°C
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Flow: {data.salineFlowRate.toFixed(0)} mL/min
+                  </div>
+                </div>
+                
+                <Separator className="bg-gray-800" />
+                
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-400">Total Flow Rate</span>
+                  <span className="text-lg font-bold text-blue-400">
+                    {data.salineFlowRate.toFixed(0)} mL/min
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+            
+            {/* Alerts */}
+            {riskLevel > 70 && (
+              <Card className="bg-red-500/10 border-red-500 animate-pulse">
+                <CardContent className="pt-6">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-red-500 flex-shrink-0" />
+                    <div>
+                      <h3 className="font-bold text-red-500 mb-1">CRITICAL ALERT</h3>
+                      <p className="text-sm text-red-400">
+                        Temperature deviation exceeds safe limits. Immediate intervention required.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
+        
+        {/* System Logs */}
+        <Card className="bg-gray-900/50 border-gray-800">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Activity className="w-5 h-5" />
+                System Logs
+              </CardTitle>
+              <Button 
+                onClick={exportLogs} 
+                variant="outline" 
+                size="sm"
+                className="gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Export Logs
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-48 rounded-lg bg-black/40 p-4 font-mono text-sm">
+              {logs.length === 0 ? (
+                <p className="text-gray-500 italic">No logs yet...</p>
+              ) : (
+                <div className="space-y-1">
+                  {logs.map((log, i) => (
+                    <div 
+                      key={i} 
+                      className={`${
+                        log.type === 'critical' ? 'text-red-400' :
+                        log.type === 'warning' ? 'text-orange-400' :
+                        'text-gray-400'
+                      }`}
+                    >
+                      <span className="text-gray-600">[{log.timestamp}]</span>
+                      <span className="ml-2">{log.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
       </div>
     </div>
-
-    <div class="right-side">
-     
-      <div class="chambers">
-        <h3>Chamber Status</h3>
-        <ul>
-          <li>C1:°</li>
-          <li>C2:°</li>
-          <li>C3:°</li>
-          <li>C4:°</li>
-        </ul>
-      </div>
-
-  
-      <div class="logs">
-        <h3>Logs</h3>
-        <ul id="logList">
-         
-        </ul>
-      </div>
-    </div>
-  </div>
-<script>
-
-const salineTempEl = document.getElementById("salineTemp");
-const patientTempEl = document.getElementById("patientTemp");
-const statusEl = document.getElementById("status");
-const logList = document.getElementById("logList");
-
-
-const ctx = document.getElementById("tempChart").getContext("2d");
-const tempChart = new Chart(ctx, {
-  type: "line",
-  data: {
-    labels: [],
-    datasets: [
-      {
-        label: "Saline Temp (°C)",
-        data: [],
-        borderColor: "blue",
-        fill: false,
-      },
-      {
-        label: "Patient Temp (°C)",
-        data: [],
-        borderColor: "red",
-        fill: false,
-      },
-    ],
-  },
-  options: {
-    responsive: true,
-    scales: { y: { beginAtZero: true } },
-  },
-});
-
-let port;
-let reader;
-
-async function connectToArduino() {
-  try {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 9600 });
-    const decoder = new TextDecoderStream();
-    port.readable.pipeTo(decoder.writable);
-    reader = decoder.readable.getReader();
-
-    addLog("✅ Connected to Arduino");
-    readData();
-  } catch (error) {
-    addLog("❌ Connection failed: " + error);
-  }
+  );
 }
-
-async function readData() {
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (value) {
-      const [saline, patient] = value.trim().split(",");
-      if (saline && patient) {
-        updateDisplay(parseFloat(saline), parseFloat(patient));
-      }
-    }
-  }
-}
-
-function updateDisplay(saline, patient) {
-  salineTempEl.textContent = saline.toFixed(1) + "°";
-  patientTempEl.textContent = patient.toFixed(1) + "°";
-
-
-  if (Math.abs(saline - patient) < 0.5) {
-    statusEl.textContent = "Stable";
-    statusEl.style.color = "green";
-  } else {
-    statusEl.textContent = "Unstable";
-    statusEl.style.color = "red";
-  }
-
-  addLog(Saline: ${saline.toFixed(1)}°, Patient: ${patient.toFixed(1)}°);
-
-
-  const time = new Date().toLocaleTimeString();
-  tempChart.data.labels.push(time);
-  tempChart.data.datasets[0].data.push(saline);
-  tempChart.data.datasets[1].data.push(patient);
-
-  if (tempChart.data.labels.length > 10) {
-    tempChart.data.labels.shift();
-    tempChart.data.datasets[0].data.shift();
-    tempChart.data.datasets[1].data.shift();
-  }
-
-  tempChart.update();
-}
-
-function addLog(text) {
-  const li = document.createElement("li");
-  li.textContent = [${new Date().toLocaleTimeString()}] ${text};
-  logList.prepend(li);
-}
-
-
-const btn = document.createElement("button");
-btn.textContent = "🔌 Connect to Arduino";
-btn.onclick = connectToArduino;
-document.body.prepend(btn);
-
-</script>
-
-</body>
-</html>
-
-
